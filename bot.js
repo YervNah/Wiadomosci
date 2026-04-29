@@ -60,8 +60,8 @@ function savePostedId(id, postedIds) {
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 function extractImageUrl(item) {
-  if (item.mediaContent?..$?.url)   return item.mediaContent.$.url;
-  if (item.mediaThumbnail?..$?.url) return item.mediaThumbnail.$.url;
+  if (item.mediaContent?.$?.url)   return item.mediaContent.$.url;
+  if (item.mediaThumbnail?.$?.url) return item.mediaThumbnail.$.url;
   if (item.enclosure?.url)          return item.enclosure.url;
   const content = item.content || item.summary || item.description || "";
   const m = content.match(/<img[^>]+src=["']([^"']+)["']/i);
