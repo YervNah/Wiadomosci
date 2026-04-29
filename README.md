@@ -1,112 +1,156 @@
-# 👋 Welcome to YervNah's Dev Corner
+# 🇵🇱 Polish News Telegram Bot
 
-> _"Breaking news in code, one commit at a time"_
-
----
-
-## 🚀 About Me
-
-I'm a **Full-Stack News Portal Developer** passionate about building real-time information systems and crafting seamless user experiences. With a focus on scalable architecture and engaging interfaces, I transform raw data into compelling narratives through technology.
-
-I believe great journalism meets great engineering, and I'm committed to creating platforms where truth travels fast and readers stay informed.
-
-## 💡 What I'm Working On
-
-- 📰 Architecting scalable news portal infrastructure with real-time updates
-- 🔄 Building automated content aggregation and distribution systems
-- 🎨 Designing responsive, accessible interfaces for news consumption
-- 🔐 Implementing secure authentication and content management systems
-- 📊 Developing analytics dashboards to track engagement and trending topics
-- 🌍 Expanding multilingual support for global audiences
-
-## 🛠️ Tech Stack
-
-**Frontend:**
-- React / Next.js
-- TypeScript
-- Tailwind CSS & Material-UI
-- Redux for state management
-
-**Backend:**
-- Node.js / Express
-- PostgreSQL / MongoDB
-- Redis for caching
-- Socket.io for real-time updates
-
-**DevOps & Tools:**
-- Docker & Kubernetes
-- CI/CD Pipelines (GitHub Actions)
-- AWS / GCP Cloud Services
-- Elasticsearch for content search
-
-## 📰 Featured Projects
-
-### **[Wiadomosci](https://github.com/YervNah/Wiadomosci)** ⭐
-A modern news portal featuring real-time article updates, advanced search capabilities, and personalized content feeds. Built with cutting-edge web technologies to deliver breaking news instantly to millions of readers.
-
-**Key Features:**
-- Real-time news feed with WebSocket updates
-- Advanced filtering and search with Elasticsearch
-- User authentication & personalized preferences
-- Multi-category content organization
-- Mobile-responsive design
-- Admin panel for content management
+Automatyczny bot, który co godzinę publikuje najważniejsze wiadomości z polskich portali na Twoim kanale Telegram — ze zdjęciem, krótkim opisem po polsku i hashtagami.
 
 ---
 
-## 📊 GitHub Statistics
+## 📡 Źródła wiadomości
 
-![YervNah's GitHub Stats](https://github-readme-stats.vercel.app/api?username=YervNah&show_icons=true&theme=radical&hide_border=true&include_all_commits=true)
-
-![Top Languages](https://github-readme-stats.vercel.app/api/top-langs/?username=YervNah&layout=compact&theme=radical&hide_border=true)
-
-## 🎯 Development Philosophy
-
-✨ **Clean Code** - Readable, maintainable, and well-documented  
-⚡ **Performance First** - Optimized load times and efficient algorithms  
-🔒 **Security Matters** - Protecting user data and platform integrity  
-♿ **Accessibility** - Building for everyone, regardless of ability  
-🌱 **Continuous Growth** - Always learning, always improving  
-
-## 🌟 Currently Exploring
-
-- Machine Learning for content recommendation engines
-- GraphQL APIs for flexible data queries
-- Serverless architecture for event-driven systems
-- Progressive Web App (PWA) capabilities
-- Advanced SEO optimization techniques
-
-## 📫 Let's Connect!
-
-- 💼 **LinkedIn:** [linkedin.com/in/yervnah](https://linkedin.com)
-- 🐦 **Twitter:** [@YervNah_Dev](https://twitter.com)
-- 📧 **Email:** yervnah.dev@example.com
-- 🌐 **Portfolio:** [yervnah.dev](https://yervnah.dev)
-- 💬 **Discord:** YervNah#2024
-
-## 🎮 Beyond the Code
-
-When I'm not coding, you'll find me:
-- 📖 Reading up on journalism trends and digital media
-- 🎬 Exploring documentaries about breaking news coverage
-- 🚴 Cycling through my city exploring local stories
-- ☕ Contributing to tech community discussions
-- 🎮 Gaming and streaming on Twitch
-
-## 📈 My Goals for 2026
-
-- [ ] Deploy Wiadomosci to production with 100K+ daily users
-- [ ] Implement AI-powered content recommendation system
-- [ ] Build mobile native apps (iOS/Android)
-- [ ] Mentor junior developers in the news tech space
-- [ ] Speak at 3 major tech conferences about real-time systems
-- [ ] Contribute to 5+ open-source projects
-
-## 💡 Pro Tip
-
-*If you're interested in real-time news systems, scalable backends, or modern web development, check out my repositories! Feel free to fork, star, and contribute.* 🌟
+| Portal | Feed |
+|--------|------|
+| WP Wiadomości | rss.wp.pl |
+| Onet Wiadomości | wiadomosci.onet.pl |
+| TVN24 | tvn24.pl |
+| Gazeta.pl | gazeta.pl |
+| Polsat News | polsatnews.pl |
+| RMF FM | rmf.fm |
+| Radio ZET | radiozet.pl |
 
 ---
 
-**Last Updated:** April 29, 2026  
-_"Stay informed, stay curious, stay coding!"_ 🚀
+## ⚙️ Instalacja (krok po kroku)
+
+### Krok 1 — Utwórz bota Telegram
+
+1. Otwórz Telegram i napisz do **@BotFather**
+2. Wpisz `/newbot`
+3. Podaj nazwę i username bota
+4. Skopiuj **token API** (wygląda tak: `123456:ABCdef...`)
+
+### Krok 2 — Utwórz kanał i dodaj bota
+
+1. Utwórz nowy kanał w Telegram
+2. Wejdź w **Ustawienia kanału → Administratorzy**
+3. Dodaj swojego bota jako administratora z uprawnieniem **"Publikowanie wiadomości"**
+4. Skopiuj username kanału (np. `@MojKanal`) lub ID kanału
+
+### Krok 3 — Klucz Anthropic API
+
+1. Wejdź na https://console.anthropic.com
+2. Utwórz konto / zaloguj się
+3. Wygeneruj klucz API
+
+### Krok 4 — Konfiguracja projektu
+
+```bash
+# Sklonuj lub pobierz pliki projektu
+cd polish-news-bot
+
+# Zainstaluj zależności
+npm install
+
+# Utwórz plik .env
+cp .env.example .env
+```
+
+Otwórz `.env` i uzupełnij:
+```env
+TELEGRAM_TOKEN=123456789:ABCdefGHIjklMNOpqrSTUvwxyz
+TELEGRAM_CHANNEL=@NazwaKanalu
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+### Krok 5 — Uruchom bota
+
+```bash
+# Załaduj zmienne środowiskowe i uruchom
+node --env-file=.env bot.js
+```
+
+Bot uruchomi się natychmiast i będzie publikować co godzinę (o pełnej godzinie).
+
+---
+
+## 🔧 Konfiguracja
+
+W pliku `bot.js` możesz zmienić:
+
+```js
+const MAX_NEWS_PER_RUN = 5;  // Ile artykułów publikować co godzinę
+```
+
+Aby dodać nowe źródła RSS, dopisz do tablicy `RSS_FEEDS`:
+```js
+{ name: "Nazwa Portalu", url: "https://portal.pl/rss.xml" },
+```
+
+---
+
+## 🖥️ Uruchomienie ciągłe (serwer)
+
+### Opcja A — PM2 (zalecane)
+
+```bash
+npm install -g pm2
+pm2 start bot.js --name "polish-news-bot" --env production
+pm2 save
+pm2 startup   # Autostart po restarcie serwera
+```
+
+### Opcja B — systemd (Linux)
+
+Utwórz `/etc/systemd/system/polish-news-bot.service`:
+```ini
+[Unit]
+Description=Polish News Telegram Bot
+After=network.target
+
+[Service]
+WorkingDirectory=/path/to/polish-news-bot
+ExecStart=/usr/bin/node --env-file=.env bot.js
+Restart=always
+User=yourusername
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable polish-news-bot
+sudo systemctl start polish-news-bot
+```
+
+### Opcja C — Docker
+
+```dockerfile
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+CMD ["node", "--env-file=.env", "bot.js"]
+```
+
+---
+
+## 📋 Wymagania
+
+- Node.js 18 lub nowszy
+- Konto Anthropic z kluczem API
+- Bot Telegram jako administrator kanału
+
+---
+
+## 💬 Przykład wpisu na kanale
+
+```
+📰 Sejm uchwalił nową ustawę o ochronie danych
+
+Posłowie przyjęli wczoraj wieczorem kontrowersyjną ustawę 
+dotyczącą ochrony danych osobowych. Za głosowało 231 posłów, 
+przeciw 189. Ustawa wejdzie w życie za 30 dni.
+
+#Polityka #Polska #Sejm #Prawo #RODO
+
+📌 TVN24  |  Czytaj więcej →
+```
