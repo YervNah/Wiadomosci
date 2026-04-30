@@ -1,7 +1,7 @@
 {
   "name": "polish-news-telegram-bot",
   "version": "1.0.0",
-  "description": "Hourly Polish news bot for Telegram (powered by Google Gemini - free)",
+  "description": "Hourly Polish news bot for Telegram (GNews + Groq/Gemini)",
   "type": "module",
   "main": "bot.js",
   "scripts": {
@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "node-cron": "^3.0.3",
-    "node-fetch": "^3.3.2",
-    "rss-parser": "^3.13.0"
+    "node-fetch": "^3.3.2"
   }
 }
