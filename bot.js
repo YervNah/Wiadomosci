@@ -2,9 +2,7 @@
  * Polish News Telegram Bot
  * Dependencies: node-cron, rss-parser, node-fetch
  *
- * AI_MODEL options (set in Railway environment variables):
- *   gemini  → Google Gemini 1.5 Flash (free tier)
- *   groq    → Groq LLaMA 3.1 (free tier)
+ * AI_MODEL env var: "groq" or "gemini"
  */
 
 import fetch from "node-fetch";
@@ -15,15 +13,15 @@ import fs from "fs";
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 const TELEGRAM_TOKEN   = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHANNEL = process.env.TELEGRAM_CHANNEL;
-const AI_MODEL         = (process.env.AI_MODEL || "groq").toLowerCase(); // "groq" or "gemini"
+const AI_MODEL         = (process.env.AI_MODEL || "groq").toLowerCase();
 const GEMINI_API_KEY   = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY     = process.env.GROQ_API_KEY;
-
 const POSTED_IDS_FILE  = "./posted_ids.json";
-const MAX_NEWS_PER_RUN = 1;   // Post only 1 article per hour
-const MAX_RETRIES      = 10;  // Stop trying after 10 failed RSS fetches in a row
+const MAX_NEWS_PER_RUN = 1;
+const MAX_RETRIES      = 10;
 
 // ── RSS FEEDS ─────────────────────────────────────────────────────────────────
+// Using feeds that focus on top/most-important stories where possible
 const RSS_FEEDS = [
   { name: "WP Wiadomosci",  url: "https://rss.wp.pl/pub/rss/0/wiadomosci.xml" },
   { name: "Onet Wiadomosci",url: "https://wiadomosci.onet.pl/.feed/onet_wiadomosci_ogolnopolskie.xml" },
@@ -34,7 +32,72 @@ const RSS_FEEDS = [
   { name: "Radio ZET",      url: "https://wiadomosci.radiozet.pl/rss/feed.xml" },
 ];
 
-// ── RSS PARSER ────────────────────────────────────────────────────────────────
+// ── TOPIC SCORING ─────────────────────────────────────────────────────────────
+// Articles matching more keywords get a higher score — highest scored = posted
+const TOPIC_KEYWORDS = {
+  geopolitics: [
+    "wojna","konflikt","ukraina","rosja","nato","ue","unia europejska","usa","niemcy",
+    "francja","chiny","izrael","palestyna","dyplomacja","sankcje","traktat","szczyt",
+    "prezydent","premier","minister","rzad","sejm","wybory","polityka","parlament",
+    "kaczynski","tusk","duda","morawiecki","trzaskowski"
+  ],
+  weather: [
+    "pogoda","burza","powodz","huragan","tornado","upał","mróz","snieg","deszcz",
+    "ostrzezenie","imgw","temperatura","fala upałow","fala mrozow","wichura","grad"
+  ],
+  economy: [
+    "inflacja","pkb","gospodarka","ceny","wzrost","kryzys","budżet","zloty","euro",
+    "nbp","stopy procentowe","bezrobocie","giełda","firma","bankructwo"
+  ],
+  disasters: [
+    "wypadek","katastrofa","pozar","trzesienie","lawina","ofiara","ranny","ewakuacja",
+    "ratownicy","szpital","smierc","zginał","tragedia"
+  ],
+};
+
+function scoreArticle(item) {
+  const text = ((item.title || "") + " " + stripHtml(item.description || item.contentSnippet || "")).toLowerCase();
+  let score = 0;
+  for (const keywords of Object.values(TOPIC_KEYWORDS)) {
+    for (const kw of keywords) {
+      if (text.includes(kw)) score++;
+    }
+  }
+  return score;
+}
+
+// ── DEDUPLICATION ─────────────────────────────────────────────────────────────
+function normalizeTitle(title) {
+  return (title || "").toLowerCase().replace(/[^a-z0-9ąćęłńóśźż]/g, "").slice(0, 80);
+}
+
+function loadPostedIds() {
+  if (fs.existsSync(POSTED_IDS_FILE)) {
+    return new Set(JSON.parse(fs.readFileSync(POSTED_IDS_FILE, "utf8")));
+  }
+  return new Set();
+}
+
+function savePostedItem(item, postedIds) {
+  // Save multiple fingerprints so we catch duplicates regardless of which field changes
+  const keys = [
+    item.guid,
+    item.link,
+    normalizeTitle(item.title),
+  ].filter(Boolean);
+  for (const k of keys) postedIds.add(k);
+  fs.writeFileSync(POSTED_IDS_FILE, JSON.stringify([...postedIds].slice(-1000)));
+}
+
+function isAlreadyPosted(item, postedIds) {
+  return (
+    (item.guid  && postedIds.has(item.guid))  ||
+    (item.link  && postedIds.has(item.link))  ||
+    postedIds.has(normalizeTitle(item.title))
+  );
+}
+
+// ── HELPERS ───────────────────────────────────────────────────────────────────
 const parser = new Parser({
   customFields: {
     item: [
@@ -45,20 +108,6 @@ const parser = new Parser({
   },
 });
 
-// ── POSTED IDS (dedup) ────────────────────────────────────────────────────────
-function loadPostedIds() {
-  if (fs.existsSync(POSTED_IDS_FILE)) {
-    return new Set(JSON.parse(fs.readFileSync(POSTED_IDS_FILE, "utf8")));
-  }
-  return new Set();
-}
-
-function savePostedId(id, postedIds) {
-  postedIds.add(id);
-  fs.writeFileSync(POSTED_IDS_FILE, JSON.stringify([...postedIds].slice(-500)));
-}
-
-// ── HELPERS ───────────────────────────────────────────────────────────────────
 function extractImageUrl(item) {
   if (item.mediaContent?.$?.url)   return item.mediaContent.$.url;
   if (item.mediaThumbnail?.$?.url) return item.mediaThumbnail.$.url;
@@ -79,100 +128,128 @@ function escapeHtml(str) {
 function sourceToHashtag(source) {
   return "#" + source
     .replace(/[^a-zA-Z0-9 ]/g, "")
-    .split(" ")
-    .filter(Boolean)
+    .split(" ").filter(Boolean)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
     .join("");
 }
 
+// Extract meaningful keywords from the title directly in JS
+// Used to guarantee topic-specific hashtags even if AI fails
+const POLISH_STOPWORDS = new Set([
+  "w","z","i","a","na","do","że","się","nie","to","jak","po","przez","o","ale",
+  "co","go","tak","już","ten","ta","te","tej","tego","temu","tym","przy","dla",
+  "od","ze","bo","czy","no","nowe","nowy","nowa","po","przed","nad","pod","za",
+  "jest","był","była","były","będzie","ma","mają","ma","jego","jej","ich","je",
+  "jeszcze","też","tylko","już","zostal","zostala","zostali","tego","które","który",
+  "ktora","oraz","jako","sobie","gdzie","kiedy","gdy","więc","zatem","jednak"
+]);
+
+function extractTitleHashtags(title) {
+  const words = title
+    .replace(/[„""«»()[\]{}<>:;,!?.'"/\\|]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 4)
+    .map((w) => w.toLowerCase())
+    .filter((w) => !POLISH_STOPWORDS.has(w));
+
+  // Capitalize first letter, keep rest as-is (preserves names)
+  return [...new Set(words)]
+    .slice(0, 4)
+    .map((w) => "#" + w.charAt(0).toUpperCase() + w.slice(1));
+}
+
 function buildFallback(title, description, sourceTag) {
-  // Ensure fallback summary is a complete sentence
   let summary = stripHtml(description).slice(0, 180).trim() || title;
   const lastPunct = Math.max(summary.lastIndexOf("."), summary.lastIndexOf("!"), summary.lastIndexOf("?"));
   if (!summary.match(/[.!?]$/)) {
     summary = lastPunct > 20 ? summary.slice(0, lastPunct + 1) : summary + ".";
   }
-  return {
-    summary,
-    hashtags: ["#Polska", "#Wiadomosci", sourceTag || "#Newsy"],
-  };
+  const titleTags = extractTitleHashtags(title);
+  return { summary, hashtags: [...titleTags, sourceTag].filter(Boolean) };
 }
 
-// ── AI: GEMINI ────────────────────────────────────────────────────────────────
-async function callGemini(prompt) {
+// ── AI ────────────────────────────────────────────────────────────────────────
+async function callGemini(systemPrompt, userPrompt) {
   const res = await fetch(
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + GEMINI_API_KEY,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.4, maxOutputTokens: 400 },
+        contents: [{ parts: [{ text: systemPrompt + "\n\n" + userPrompt }] }],
+        generationConfig: { temperature: 0.3, maxOutputTokens: 300 },
       }),
     }
   );
   const data = await res.json();
-  if (!data.candidates || data.candidates.length === 0) {
-    console.warn("Gemini no candidates:", JSON.stringify(data));
-    return null;
-  }
+  if (!data.candidates?.length) { console.warn("Gemini no candidates:", JSON.stringify(data)); return null; }
   return data.candidates[0]?.content?.parts?.[0]?.text?.trim() || null;
 }
 
-// ── AI: GROQ ──────────────────────────────────────────────────────────────────
-async function callGroq(prompt) {
+async function callGroq(systemPrompt, userPrompt) {
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer " + GROQ_API_KEY,
-    },
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + GROQ_API_KEY },
     body: JSON.stringify({
       model: "llama-3.1-8b-instant",
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 400,
-      temperature: 0.4,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user",   content: userPrompt },
+      ],
+      max_tokens: 300,
+      temperature: 0.3,
     }),
   });
   const data = await res.json();
   return data.choices?.[0]?.message?.content?.trim() || null;
 }
 
-// ── GENERATE SUMMARY + HASHTAGS ───────────────────────────────────────────────
 async function generateSummaryAndHashtags(title, description, source) {
-  const cleanDesc = stripHtml(description).slice(0, 800);
+  const cleanDesc = stripHtml(description).slice(0, 600);
   const sourceTag = sourceToHashtag(source);
+  // Pre-extract keywords from title as a guaranteed seed
+  const titleTags  = extractTitleHashtags(title);
 
-  const prompt =
-    "Jestes redaktorem polskiego kanalu informacyjnego na Telegramie.\n\n"
-    + "ZADANIE 1 - PODSUMOWANIE:\n"
-    + "Napisz dokladnie 1-2 PELNE zdania po polsku opisujace sedno tej wiadomosci.\n"
-    + "ZASADY: Kazde zdanie musi byc kompletne i konczyc sie kropka lub wykrzyknikiem. Nie ucinaj w polowie slowa ani zdania. Maksymalnie 180 znakow lacznie.\n\n"
-    + "ZADANIE 2 - HASHTAGI:\n"
-    + "Zaproponuj 4-5 hashtagow scisle zwiazanych z trescia artykulu (osoby, miejsca, tematy, slowa kluczowe z tytulu).\n"
-    + "ZASADY: Tylko polskie slowa kluczowe z tytulu/tresci. Bez ogolnych tagow jak #News #Wiadomosci #Informacje #Polska.\n\n"
-    + "Tytul: " + title + "\n"
-    + "Opis: " + cleanDesc + "\n"
-    + "Zrodlo: " + source + "\n\n"
-    + 'Odpowiedz TYLKO w JSON bez zadnych dodatkow: {"summary": "Pelne zdanie konczace sie kropka.", "hashtags": ["#Temat1", "#Temat2"]}';
+  const systemPrompt =
+    "Jestes redaktorem polskiego kanalu Telegram. Odpowiadasz WYLACZNIE poprawnym JSON-em bez zadnych dodatkow, markdown ani komentarzy.";
+
+  const userPrompt =
+    "Tytul: " + title + "\n"
+    + "Opis: " + cleanDesc + "\n\n"
+    + "Zadanie 1 — PODSUMOWANIE: Napisz 1-2 kompletne zdania po polsku (max 160 znakow). "
+    + "Zdanie MUSI konczyc sie kropka. Nie ucinaj w polowie.\n\n"
+    + "Zadanie 2 — HASHTAGI: Wygeneruj dokladnie 4 hashtagi.\n"
+    + "Regula: Kazdy hashtag MUSI byc slowem kluczowym wprost z tytulu lub tresci artykulu "
+    + "(imie, nazwisko, kraj, miasto, temat, wydarzenie). "
+    + "ZAKAZ uzywania: #Polska #Wiadomosci #News #Informacje #Aktualnosci.\n"
+    + "Przykladowe DOBRE hashtagi dla tytulu 'Tusk spotkal sie z Scholzem w Berlinie': "
+    + "#Tusk #Scholz #Berlin #Dyplomacja\n\n"
+    + "Odpowiedz TYLKO tym JSON-em:\n"
+    + '{"summary":"zdanie konczace sie kropka.","hashtags":["#Slowo1","#Slowo2","#Slowo3","#Slowo4"]}';
 
   try {
-    const text = AI_MODEL === "gemini" ? await callGemini(prompt) : await callGroq(prompt);
+    const text = AI_MODEL === "gemini"
+      ? await callGemini(systemPrompt, userPrompt)
+      : await callGroq(systemPrompt, userPrompt);
+
     if (!text) return buildFallback(title, description, sourceTag);
 
     const clean = text.replace(/```json|```/g, "").trim();
     const parsed = JSON.parse(clean);
 
-    // Guarantee summary ends at a sentence boundary
+    // Ensure complete sentence
     let summary = (parsed.summary || "").trim();
     if (summary && !summary.match(/[.!?]$/)) {
       const lastPunct = Math.max(summary.lastIndexOf("."), summary.lastIndexOf("!"), summary.lastIndexOf("?"));
       summary = lastPunct > 20 ? summary.slice(0, lastPunct + 1) : summary + ".";
     }
+    if (!summary) summary = title + ".";
 
-    // Deduplicate and always append source hashtag last
-    const hashtags = (parsed.hashtags || []).filter((h) => h !== sourceTag);
-    hashtags.push(sourceTag);
+    // Merge AI hashtags with title-extracted ones, deduplicate, cap at 5 + source
+    const aiTags   = (parsed.hashtags || []).map((h) => h.startsWith("#") ? h : "#" + h);
+    const merged   = [...new Set([...aiTags, ...titleTags])].slice(0, 5);
+    // Remove source tag if somehow added, then always put it last
+    const hashtags = merged.filter((h) => h !== sourceTag).concat(sourceTag);
 
     return { summary, hashtags };
   } catch (err) {
@@ -207,13 +284,13 @@ async function fetchAllNews() {
 
   for (const feed of RSS_FEEDS) {
     if (failCount >= MAX_RETRIES) {
-      console.warn("Reached " + MAX_RETRIES + " fetch failures, stopping RSS fetching this run.");
+      console.warn("Reached " + MAX_RETRIES + " failures, stopping RSS fetch this run.");
       break;
     }
     try {
       console.log("Fetching: " + feed.name);
       const parsed = await parser.parseURL(feed.url);
-      const items = (parsed.items || []).slice(0, 5).map((item) => ({ ...item, sourceName: feed.name }));
+      const items = (parsed.items || []).slice(0, 8).map((item) => ({ ...item, sourceName: feed.name }));
       allItems.push(...items);
     } catch (err) {
       failCount++;
@@ -221,13 +298,12 @@ async function fetchAllNews() {
     }
   }
 
-  allItems.sort((a, b) => new Date(b.pubDate || b.isoDate || 0) - new Date(a.pubDate || a.isoDate || 0));
   return allItems;
 }
 
 // ── MAIN ──────────────────────────────────────────────────────────────────────
 async function runNewsBot() {
-  console.log("\n[" + new Date().toISOString() + "] Running news bot (model: " + AI_MODEL + ")...");
+  console.log("\n[" + new Date().toISOString() + "] Running (model: " + AI_MODEL + ")...");
   const postedIds = loadPostedIds();
 
   let articles;
@@ -238,62 +314,62 @@ async function runNewsBot() {
     return;
   }
 
-  const newArticles = articles.filter((item) => {
-    const id = item.guid || item.link || item.title;
-    return id && !postedIds.has(id);
-  });
+  // Filter out duplicates by guid, link, AND normalized title
+  const newArticles = articles.filter((item) => !isAlreadyPosted(item, postedIds));
+  console.log("Total fetched: " + articles.length + " | New (not posted yet): " + newArticles.length);
 
-  console.log("New articles available: " + newArticles.length + " | Will post: " + Math.min(newArticles.length, MAX_NEWS_PER_RUN));
-
-  const toPost = newArticles.slice(0, MAX_NEWS_PER_RUN);
-
-  for (const item of toPost) {
-    const id = item.guid || item.link || item.title;
-    const title = item.title || "Brak tytulu";
-    const link = item.link || "";
-    const imageUrl = extractImageUrl(item);
-
-    try {
-      console.log("Processing: " + title.slice(0, 60));
-
-      const { summary, hashtags } = await generateSummaryAndHashtags(
-        title,
-        item.contentSnippet || item.description || item.content || "",
-        item.sourceName
-      );
-
-      const hashtagString = Array.isArray(hashtags) ? hashtags.join(" ") : "";
-      const caption =
-        "&#x1F4F0; <b>" + escapeHtml(title) + "</b>\n\n" +
-        escapeHtml(summary) + "\n\n" +
-        hashtagString + "\n\n" +
-        "&#x1F4CC; <i>" + item.sourceName + "</i>  |  <a href=\"" + link + "\">Czytaj wiecej</a>";
-
-      let result = imageUrl
-        ? await sendPhotoToTelegram(TELEGRAM_CHANNEL, imageUrl, caption)
-        : await sendMessageToTelegram(TELEGRAM_CHANNEL, caption);
-
-      if (result.ok) {
-        console.log("Posted: " + title.slice(0, 60));
-        savePostedId(id, postedIds);
-      } else {
-        console.warn("Telegram error:", result.description);
-        // Retry without image if image caused the failure
-        if (imageUrl && result.description && result.description.includes("photo")) {
-          const retry = await sendMessageToTelegram(TELEGRAM_CHANNEL, caption);
-          if (retry.ok) {
-            savePostedId(id, postedIds);
-            console.log("Posted (text fallback): " + title.slice(0, 60));
-          }
-        }
-      }
-    } catch (err) {
-      console.error("Error processing article:", err.message);
-    }
+  if (newArticles.length === 0) {
+    console.log("Nothing new to post this hour.");
+    return;
   }
 
-  if (toPost.length === 0) {
-    console.log("No new articles to post this hour.");
+  // Score and pick the most important article
+  const scored = newArticles.map((item) => ({ item, score: scoreArticle(item) }));
+  scored.sort((a, b) => b.score - a.score);
+
+  console.log("Top 3 candidates:");
+  scored.slice(0, 3).forEach((s) => console.log("  [" + s.score + "] " + (s.item.title || "").slice(0, 70)));
+
+  const { item } = scored[0];
+  const title    = item.title || "Brak tytulu";
+  const link     = item.link || "";
+  const imageUrl = extractImageUrl(item);
+
+  try {
+    console.log("Processing: " + title.slice(0, 70));
+
+    const { summary, hashtags } = await generateSummaryAndHashtags(
+      title,
+      item.contentSnippet || item.description || item.content || "",
+      item.sourceName
+    );
+
+    const hashtagString = hashtags.join(" ");
+    const caption =
+      "&#x1F4F0; <b>" + escapeHtml(title) + "</b>\n\n" +
+      escapeHtml(summary) + "\n\n" +
+      hashtagString + "\n\n" +
+      "&#x1F4CC; <i>" + item.sourceName + "</i>  |  <a href=\"" + link + "\">Czytaj wiecej</a>";
+
+    let result = imageUrl
+      ? await sendPhotoToTelegram(TELEGRAM_CHANNEL, imageUrl, caption)
+      : await sendMessageToTelegram(TELEGRAM_CHANNEL, caption);
+
+    if (result.ok) {
+      console.log("Posted: " + title.slice(0, 70));
+      savePostedItem(item, postedIds);
+    } else {
+      console.warn("Telegram error:", result.description);
+      if (imageUrl && result.description?.includes("photo")) {
+        const retry = await sendMessageToTelegram(TELEGRAM_CHANNEL, caption);
+        if (retry.ok) {
+          savePostedItem(item, postedIds);
+          console.log("Posted (text fallback): " + title.slice(0, 70));
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Error processing article:", err.message);
   }
 
   console.log("Done. Next run in 1 hour.\n");
