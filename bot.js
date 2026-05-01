@@ -24,76 +24,44 @@ const GEMINI_API_KEY   = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY     = process.env.GROQ_API_KEY;
 const POSTED_IDS_FILE  = "./posted_ids.json";
 
-// ── GNEWS TOPIC QUERIES — Polish domestic politics only ───────────────────────
-// Strategy: first try fresh 2-day window; if nothing new found, widen to 7 days.
-// GNews free tier: 100 req/day. We use up to 8 queries/run = fine at 1 run/hour.
-function buildPoliticsUrl(keywords, daysBack, max) {
-  const from = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000)
-    .toISOString().slice(0, 10) + "T00:00:00Z";
-  return "https://gnews.io/api/v4/search?q=" + keywords
-    + "&lang=pl&country=pl&max=" + max + "&sortby=relevance&from=" + from + "&apikey=";
-}
-
-// Core politics keywords — all about internal Polish government/policy
-const POL_KEYWORDS = [
-  "sejm+OR+senat+OR+rzad+OR+premier+OR+prezydent",
-  "minister+OR+ministerstwo+OR+ustawa+OR+prawo",
-  "tusk+OR+duda+OR+koalicja+OR+opozycja+OR+wybory",
-  "polityka+polska+OR+partia+OR+PiS+OR+KO+OR+lewica",
+// ── GNEWS TOPIC QUERIES ───────────────────────────────────────────────────────
+// We fetch from multiple topic buckets to get a diverse and important mix.
+// GNews free tier: 100 req/day. We use 4 queries/hour = 96/day max.
+const GNEWS_QUERIES = [
+  { topic: "breaking",     url: "https://gnews.io/api/v4/top-headlines?lang=pl&country=pl&max=10&apikey=" },
+  { topic: "world",        url: "https://gnews.io/api/v4/top-headlines?lang=pl&topic=world&max=10&apikey=" },
+  { topic: "nation",       url: "https://gnews.io/api/v4/top-headlines?lang=pl&topic=nation&max=10&apikey=" },
+  { topic: "weather",      url: "https://gnews.io/api/v4/search?q=pogoda+OR+burza+OR+powodz+OR+IMGW&lang=pl&max=5&apikey=" },
 ];
 
-// Build queries: 2-day window first (fresh), then 7-day (buffer)
-const GNEWS_QUERIES_FRESH = POL_KEYWORDS.map((kw, i) => ({
-  label: "politics-fresh-" + i,
-  url: buildPoliticsUrl(kw, 2, 10),
-}));
-
-const GNEWS_QUERIES_BUFFER = POL_KEYWORDS.map((kw, i) => ({
-  label: "politics-buffer-" + i,
-  url: buildPoliticsUrl(kw, 7, 10),
-}));
-
-// ── TOPIC SCORING — domestic Polish politics only ────────────────────────────
-const POLITICS_SCORE_KEYWORDS = [
-  // Institutions
-  "sejm","senat","rzad","rząd","ministerstwo","trybunał","sąd najwyższy","kprm",
-  // Roles
-  "premier","prezydent","minister","marszałek","poseł","senator","wiceminister",
-  // Parties / people
-  "tusk","duda","kowalski","sikorski","bodnar","nawrocki","trzaskowski",
-  "pis","ko","lewica","td","koalicja","opozycja","partia",
-  // Actions
-  "ustawa","głosowanie","debata","expose","wotum","interpelacja","budżet",
-  "nowelizacja","rozporządzenie","reforma","projekt ustawy","komisja sejmowa",
-  // Domestic policy topics
-  "wybory","kampania","sondaż","koalicja rządząca","polityka krajowa",
-];
-
-// Articles matching ANY of these are excluded — not internal politics
-const EXCLUSION_KEYWORDS = [
-  // Sports
-  "mecz","liga","puchar","gol","bramka","koszykówka","siatkówka","tenis","wyścig",
-  "formuła","olimpiada","mistrzostwa świata","mundial","euro 2024","nba","nhl","premier league",
-  // Culture / entertainment
-  "film","serial","netflix","premiera kinowa","koncert","festiwal muzyczny","oscar",
-  "grammy","aktor","reżyser","piosenka","album","galeria","muzeum","teatr","opera",
-  // International non-political
-  "pogoda","huragan","trzęsienie","erupcja","powódź za granicą",
-  "gwiazda","celebrity","influencer","tiktok","instagram",
-  // Foreign sports teams / leagues
-  "real madrid","barcelona","manchester","liverpool","juventus","bayern",
-];
-
-function isExcluded(article) {
-  const text = ((article.title || "") + " " + (article.description || "")).toLowerCase();
-  return EXCLUSION_KEYWORDS.some((kw) => text.includes(kw));
-}
+// ── TOPIC SCORING ─────────────────────────────────────────────────────────────
+const TOPIC_KEYWORDS = {
+  geopolitics: [
+    "wojna","konflikt","ukraina","rosja","nato","ue","unia europejska","usa","niemcy",
+    "francja","chiny","izrael","palestyna","dyplomacja","sankcje","szczyt","atak",
+    "tusk","duda","premier","prezydent","minister","rzad","sejm","wybory","polityka"
+  ],
+  weather: [
+    "pogoda","burza","powodz","huragan","upał","mróz","snieg","deszcz","ostrzezenie",
+    "imgw","temperatura","fala","wichura","grad","zalanie","podtopienie"
+  ],
+  economy: [
+    "inflacja","pkb","gospodarka","ceny","kryzys","budżet","zloty","euro","nbp",
+    "stopy procentowe","bezrobocie","firma","bankructwo","recesja"
+  ],
+  disasters: [
+    "wypadek","katastrofa","pozar","trzesienie","lawina","ofiara","ranny","ewakuacja",
+    "smierc","zginął","tragedia","eksplozja","zamach"
+  ],
+};
 
 function scoreArticle(article) {
   const text = ((article.title || "") + " " + (article.description || "")).toLowerCase();
   let score = 0;
-  for (const kw of POLITICS_SCORE_KEYWORDS) {
-    if (text.includes(kw)) score++;
+  for (const keywords of Object.values(TOPIC_KEYWORDS)) {
+    for (const kw of keywords) {
+      if (text.includes(kw)) score++;
+    }
   }
   return score;
 }
@@ -250,47 +218,28 @@ async function generateSummaryAndHashtags(article) {
 }
 
 // ── GNEWS FETCH ───────────────────────────────────────────────────────────────
-async function fetchFromQueries(queries) {
-  const results = [];
-  const seen = new Set();
-  for (const q of queries) {
+async function fetchAllNews() {
+  const allArticles = [];
+
+  for (const q of GNEWS_QUERIES) {
     try {
+      console.log("Fetching GNews topic: " + q.topic);
       const res  = await fetch(q.url + GNEWS_API_KEY);
       const data = await res.json();
-      if (data.errors) { console.warn("GNews error [" + q.label + "]:", JSON.stringify(data.errors)); continue; }
-      const fresh = (data.articles || []).filter((a) => a.url && !seen.has(a.url));
-      fresh.forEach((a) => seen.add(a.url));
-      results.push(...fresh.map((a) => ({ ...a, _label: q.label })));
+
+      if (data.errors) {
+        console.warn("GNews error for " + q.topic + ":", JSON.stringify(data.errors));
+        continue;
+      }
+
+      const articles = (data.articles || []).map((a) => ({ ...a, _topic: q.topic }));
+      allArticles.push(...articles);
     } catch (err) {
-      console.warn("Failed [" + q.label + "]: " + err.message);
+      console.warn("Failed fetching GNews " + q.topic + ": " + err.message);
     }
   }
-  return results;
-}
 
-async function fetchAllNews(postedIds) {
-  // Step 1: try fresh 2-day window
-  console.log("Fetching fresh politics news (2-day window)...");
-  let articles = await fetchFromQueries(GNEWS_QUERIES_FRESH);
-
-  // Filter out excluded topics and already-posted
-  let filtered = articles
-    .filter((a) => !isExcluded(a))
-    .filter((a) => !isAlreadyPosted(a, postedIds));
-
-  console.log("Fresh fetch: " + articles.length + " total | " + filtered.length + " new politics articles");
-
-  // Step 2: if nothing found, widen to 7-day buffer
-  if (filtered.length === 0) {
-    console.log("No fresh articles — falling back to 7-day buffer...");
-    articles = await fetchFromQueries(GNEWS_QUERIES_BUFFER);
-    filtered = articles
-      .filter((a) => !isExcluded(a))
-      .filter((a) => !isAlreadyPosted(a, postedIds));
-    console.log("Buffer fetch: " + articles.length + " total | " + filtered.length + " new politics articles");
-  }
-
-  return filtered;
+  return allArticles;
 }
 
 // ── TELEGRAM ──────────────────────────────────────────────────────────────────
@@ -317,20 +266,23 @@ async function runNewsBot() {
   console.log("\n[" + new Date().toISOString() + "] Running (model: " + AI_MODEL + ")...");
   const postedIds = loadPostedIds();
 
-  let newArticles;
+  let articles;
   try {
-    newArticles = await fetchAllNews(postedIds);
+    articles = await fetchAllNews();
   } catch (err) {
     console.error("Failed to fetch news:", err.message);
     return;
   }
 
+  const newArticles = articles.filter((a) => !isAlreadyPosted(a, postedIds));
+  console.log("Total fetched: " + articles.length + " | New: " + newArticles.length);
+
   if (newArticles.length === 0) {
-    console.log("No new domestic politics articles found even in 7-day buffer. Skipping.");
+    console.log("Nothing new to post this hour.");
     return;
   }
 
-  // Score and pick the most relevant politics article
+  // Score and pick the most important article
   const scored = newArticles
     .map((a) => ({ a, score: scoreArticle(a) }))
     .sort((x, y) => y.score - x.score);
