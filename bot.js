@@ -37,9 +37,7 @@ const GNEWS_QUERIES = [
 // ── TOPIC SCORING ─────────────────────────────────────────────────────────────
 const TOPIC_KEYWORDS = {
   geopolitics: [
-    "wojna","konflikt","ukraina","rosja","nato","ue","unia europejska","usa","niemcy",
-    "francja","chiny","izrael","palestyna","dyplomacja","sankcje","szczyt","atak",
-    "tusk","duda","premier","prezydent","minister","rzad","sejm","wybory","polityka"
+    "tusk","nawrocki","premier","prezydent","minister","rzad","sejm","wybory","polityka"
   ],
   weather: [
     "pogoda","burza","powodz","huragan","upał","mróz","snieg","deszcz","ostrzezenie",
@@ -48,10 +46,6 @@ const TOPIC_KEYWORDS = {
   economy: [
     "inflacja","pkb","gospodarka","ceny","kryzys","budżet","zloty","euro","nbp",
     "stopy procentowe","bezrobocie","firma","bankructwo","recesja"
-  ],
-  disasters: [
-    "wypadek","katastrofa","pozar","trzesienie","lawina","ofiara","ranny","ewakuacja",
-    "smierc","zginął","tragedia","eksplozja","zamach"
   ],
 };
 
@@ -65,7 +59,25 @@ function scoreArticle(article) {
   }
   return score;
 }
+// Articles matching ANY of these are excluded — not internal politics
+const EXCLUSION_KEYWORDS = [
+  // Sports
+  "mecz","liga","puchar","gol","bramka","koszykówka","siatkówka","tenis","wyścig",
+  "formuła","olimpiada","mistrzostwa świata","mundial","euro 2024","nba","nhl","premier league",
+  // Culture / entertainment
+  "film","serial","netflix","premiera kinowa","koncert","festiwal muzyczny","oscar",
+  "grammy","aktor","reżyser","piosenka","album","galeria","muzeum","teatr","opera",
+  // International non-political
+  "pogoda","huragan","trzęsienie","erupcja","powódź za granicą",
+  "gwiazda","celebrity","influencer","tiktok","instagram",
+  // Foreign sports teams / leagues
+  "real madrid","barcelona","manchester","liverpool","juventus","bayern",
+];
 
+function isExcluded(article) {
+  const text = ((article.title || "") + " " + (article.description || "")).toLowerCase();
+  return EXCLUSION_KEYWORDS.some((kw) => text.includes(kw));
+}
 // ── DEDUPLICATION ─────────────────────────────────────────────────────────────
 function normalizeTitle(title) {
   return (title || "").toLowerCase().replace(/[^a-z0-9ąćęłńóśźż]/g, "").slice(0, 80);
@@ -185,8 +197,8 @@ async function generateSummaryAndHashtags(article) {
     + "Zadanie 2 — HASHTAGI: Wygeneruj dokladnie 4 hashtagi.\n"
     + "Kazdy hashtag MUSI byc konkretnym slowem kluczowym z tytulu lub opisu "
     + "(imie, nazwisko, kraj, miasto, temat, wydarzenie). "
-    + "ZAKAZ: #Polska #Wiadomosci #News #Informacje #Aktualnosci #Breaking.\n"
-    + "Przyklad dla 'Tusk spotkal sie z Scholzem w Berlinie': #Tusk #Scholz #Berlin #Dyplomacja\n\n"
+    + "ZAKAZ: #News #Informacje #Aktualnosci #Breaking.\n"
+    + "Przyklad dla 'Tusk spotkal sie z Scholzem w Berlinie': #Polska #Wiadomosci #Tusk #Scholz #Berlin #Dyplomacja\n\n"
     + '{"summary":"zdanie konczace sie kropka.","hashtags":["#Slowo1","#Slowo2","#Slowo3","#Slowo4"]}';
 
   try {
